@@ -3,7 +3,14 @@
 import { useState } from "react"
 import { useRouter } from "next/navigation"
 import { supabase } from "../../lib/supabaseClient"
-import { FaCar, FaUser, FaLock, FaSignInAlt } from "react-icons/fa"
+import { 
+  FaCar, 
+  FaUser, 
+  FaLock, 
+  FaSignInAlt,
+  FaEye,
+  FaEyeSlash
+} from "react-icons/fa"
 
 export default function Login() {
   const router = useRouter()
@@ -11,36 +18,77 @@ export default function Login() {
   const [password, setPassword] = useState("")
   const [loading, setLoading] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
+  const [error, setError] = useState("")
 
   const handleLogin = async (e) => {
     e.preventDefault()
     setLoading(true)
+    setError("")
 
-    const { data, error } = await supabase
-      .from("tb_user")
-      .select("*")
-      .eq("username", username)
-      .eq("password", password)
-      .single()
+    try {
+      console.log("Mencoba login dengan username:", username)
+      
+      // Cari user berdasarkan username di tb_user
+      const { data: userData, error: userError } = await supabase
+        .from("tb_user")
+        .select("*")
+        .eq("username", username)
+        .single()
 
-    console.log("DATA:", data)
-    console.log("ERROR:", error)
+      console.log("Hasil query user:", { userData, userError })
+      
+      if (userError || !userData) {
+        setError("Username tidak ditemukan")
+        setLoading(false)
+        return
+      }
 
-    if (!data) {
-      alert("Login gagal. Periksa username dan password Anda.")
+      // Cek status aktif
+      if (!userData.status_aktif) {
+        setError("Akun Anda tidak aktif. Silakan hubungi administrator.")
+        setLoading(false)
+        return
+      }
+
+      // Cek password (plain text)
+      if (userData.password !== password) {
+        setError("Password salah")
+        setLoading(false)
+        return
+      }
+
+      // Buat session manual tanpa Supabase Auth
+      // Simpan data user ke localStorage
+      const userSession = {
+        id: userData.id_user,
+        username: userData.username,
+        nama_lengkap: userData.nama_lengkap,
+        role: userData.role,
+        status_aktif: userData.status_aktif
+      }
+      
+      localStorage.setItem("currentUser", JSON.stringify(userSession))
+      localStorage.setItem("isLoggedIn", "true")
+      
+      console.log("Login berhasil:", userSession)
+
+      // Redirect berdasarkan role
+      if (userData.role === "admin") {
+        router.push("/admin")
+      } else if (userData.role === "petugas") {
+        router.push("/petugas")
+      } else if (userData.role === "owner") {
+        router.push("/owner")
+      } else {
+        router.push("/")
+      }
+
+    } catch (err) {
+      console.error("Login error:", err)
+      setError("Terjadi kesalahan. Silakan coba lagi.")
+    } finally {
       setLoading(false)
-      return
     }
-
-    if (data.role === "admin") {
-      router.push("/admin")
-    } else if (data.role === "petugas") {
-      router.push("/petugas")
-    } else if (data.role === "owner") {
-      router.push("/owner")
-    }
-
-    setLoading(false)
   }
 
   return (
@@ -66,6 +114,13 @@ export default function Login() {
 
         {/* Form Login */}
         <div className="p-8">
+          {/* Error Alert */}
+          {error && (
+            <div className="mb-4 p-3 bg-red-100 border border-red-400 text-red-700 rounded-lg text-sm">
+              {error}
+            </div>
+          )}
+
           <form onSubmit={handleLogin} className="space-y-6">
             <div>
               <label className="block text-gray-700 text-sm font-semibold mb-2" htmlFor="username">
@@ -109,9 +164,10 @@ export default function Login() {
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-3 text-gray-500 hover:text-gray-700"
+                  className="absolute right-3 top-3 text-gray-500 hover:text-blue-600 transition-colors"
+                  title={showPassword ? "Sembunyikan password" : "Tampilkan password"}
                 >
-                  {showPassword ? "🙈" : "👁️"}
+                  {showPassword ? <FaEyeSlash size={18} /> : <FaEye size={18} />}
                 </button>
               </div>
             </div>
@@ -131,6 +187,15 @@ export default function Login() {
               )}
             </button>
           </form>
+
+          {/* Informasi */}
+          <div className="mt-6 pt-6 border-t border-gray-200">
+            <div className="bg-blue-50 rounded-lg p-3">
+              <p className="text-xs text-blue-800 text-center">
+               Gunakan akun yang sudah terdaftar untuk masuk.
+              </p>
+            </div>
+          </div>
         </div>
       </div>
     </div>

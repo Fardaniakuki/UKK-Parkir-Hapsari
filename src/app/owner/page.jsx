@@ -8,7 +8,6 @@ import {
   FaMoneyBillWave, 
   FaCar, 
   FaParking,
-  FaDownload,
   FaPrint,
   FaFilePdf,
   FaFileExcel,
@@ -16,9 +15,15 @@ import {
   FaUsers,
   FaBuilding,
   FaWallet,
-  FaHistory,
   FaFilter,
-  FaFileExport
+  FaFileExport,
+  FaSignOutAlt,
+  FaMotorcycle,
+  FaTruck,
+  FaCalendarAlt,
+  FaUndo,
+  FaExchangeAlt,
+  FaList
 } from "react-icons/fa"
 import {
   LineChart,
@@ -33,40 +38,186 @@ import {
   Legend,
   ResponsiveContainer
 } from 'recharts'
-import { useReactToPrint } from 'react-to-print'
+import * as XLSX from 'xlsx'
+import DatePicker from 'react-datepicker'
+import 'react-datepicker/dist/react-datepicker.css'
+import id from 'date-fns/locale/id'
 
 export default function OwnerDashboard() {
   const router = useRouter()
   const [loading, setLoading] = useState(true)
+  const [authChecking, setAuthChecking] = useState(true)
   const [exporting, setExporting] = useState(false)
   const [dateRange, setDateRange] = useState("week")
-  const [startDate, setStartDate] = useState("")
-  const [endDate, setEndDate] = useState("")
+  const [startDate, setStartDate] = useState(null)
+  const [endDate, setEndDate] = useState(null)
+  const [filterJenis, setFilterJenis] = useState("all")
+  const [currentUser, setCurrentUser] = useState(null)
+  const [notification, setNotification] = useState({ show: false, message: "", type: "" })
   
   // State untuk data
   const [summary, setSummary] = useState({
     totalPendapatan: 0,
     totalKendaraan: 0,
     rataRataPerHari: 0,
-    okupansiRataRata: 0,
-    totalUser: 0,
     totalArea: 0
   })
 
   const [revenueData, setRevenueData] = useState([])
   const [vehicleTypeData, setVehicleTypeData] = useState([])
   const [areaPerformance, setAreaPerformance] = useState([])
-  const [recentTransactions, setRecentTransactions] = useState([])
+  const [transactions, setTransactions] = useState([])
+  const [filteredTransactions, setFilteredTransactions] = useState([])
   const [topAreas, setTopAreas] = useState([])
 
   // Ref untuk print
-  const reportRef = useRef()
+  const reportRef = useRef(null)
 
   const COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899']
 
+  // Fungsi notifikasi
+  const showNotification = (message, type = "success") => {
+    setNotification({ show: true, message, type })
+    setTimeout(() => {
+      setNotification({ show: false, message: "", type: "" })
+    }, 3000)
+  }
+
+  // Format tanggal Indonesia
+  const formatDateTime = (datetime) => {
+    if (!datetime) return '-'
+    const utcDate = new Date(datetime)
+    if (isNaN(utcDate.getTime())) return '-'
+    const wibDate = new Date(utcDate.getTime() + (7 * 60 * 60 * 1000))
+    
+    const months = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember']
+    const days = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu']
+    
+    const dayName = days[wibDate.getDay()]
+    const day = wibDate.getDate()
+    const month = months[wibDate.getMonth()]
+    const year = wibDate.getFullYear()
+    const hours = String(wibDate.getHours()).padStart(2, '0')
+    const minutes = String(wibDate.getMinutes()).padStart(2, '0')
+    
+    return `${dayName}, ${day} ${month} ${year} ${hours}:${minutes}`
+  }
+
+  // Format tanggal untuk display
+  const formatDateDisplay = (date) => {
+    if (!date) return ''
+    const months = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember']
+    const d = new Date(date)
+    return `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}`
+  }
+
+  // Cek autentikasi
   useEffect(() => {
-    fetchReportData()
-  }, [dateRange, startDate, endDate])
+    const checkAuth = () => {
+      try {
+        const isLoggedIn = localStorage.getItem("isLoggedIn")
+        const savedUser = localStorage.getItem("currentUser")
+        
+        if (!isLoggedIn || !savedUser) {
+          router.push("/login")
+          return
+        }
+        
+        const user = JSON.parse(savedUser)
+        
+        if (user.role !== "owner") {
+          showNotification("Akses ditolak. Anda bukan owner.", "error")
+          setTimeout(() => {
+            if (user.role === "admin") router.push("/admin")
+            else if (user.role === "petugas") router.push("/petugas")
+            else router.push("/login")
+          }, 1500)
+          return
+        }
+        
+        setCurrentUser(user)
+        setAuthChecking(false)
+        fetchReportData()
+      } catch (error) {
+        console.error("Auth check error:", error)
+        router.push("/login")
+      }
+    }
+
+    checkAuth()
+  }, [router])
+
+  // Auto fetch ketika filter berubah
+  useEffect(() => {
+    if (!authChecking) {
+      fetchReportData()
+    }
+  }, [dateRange, startDate, endDate, filterJenis])
+
+  // Filter transaksi berdasarkan rentang waktu dan jenis kendaraan
+  useEffect(() => {
+    if (transactions.length > 0) {
+      const dateFilter = getDateFilter()
+      const startUTC = new Date(dateFilter.start.getTime() - (7 * 60 * 60 * 1000))
+      const endUTC = new Date(dateFilter.end.getTime() - (7 * 60 * 60 * 1000))
+      
+      let filtered = transactions.filter(transaction => {
+        const transDate = new Date(transaction.waktu_masuk)
+        return transDate >= startUTC && transDate <= endUTC
+      })
+      
+      // Filter berdasarkan jenis kendaraan
+      if (filterJenis !== "all") {
+        filtered = filtered.filter(transaction => 
+          transaction.tb_kendaraan?.jenis_kendaraan === filterJenis
+        )
+      }
+      
+      setFilteredTransactions(filtered)
+    }
+  }, [transactions, dateRange, startDate, endDate, filterJenis])
+
+  const getDateFilter = () => {
+    const now = new Date()
+    let start = new Date()
+    let end = new Date()
+
+    switch(dateRange) {
+      case "today":
+        start.setHours(0, 0, 0, 0)
+        end.setHours(23, 59, 59, 999)
+        return { start, end }
+      
+      case "week":
+        start.setDate(now.getDate() - 7)
+        start.setHours(0, 0, 0, 0)
+        return { start, end: now }
+      
+      case "month":
+        start.setMonth(now.getMonth() - 1)
+        start.setHours(0, 0, 0, 0)
+        return { start, end: now }
+      
+      case "year":
+        start.setFullYear(now.getFullYear() - 1)
+        start.setHours(0, 0, 0, 0)
+        return { start, end: now }
+      
+      case "custom":
+        if (startDate && endDate) {
+          const s = new Date(startDate)
+          s.setHours(0, 0, 0, 0)
+          const e = new Date(endDate)
+          e.setHours(23, 59, 59, 999)
+          return { start: s, end: e }
+        }
+        return { start: new Date(now.setMonth(now.getMonth() - 1)), end: now }
+      
+      default:
+        start.setDate(now.getDate() - 7)
+        return { start, end: now }
+    }
+  }
 
   const fetchReportData = async () => {
     setLoading(true)
@@ -77,7 +228,7 @@ export default function OwnerDashboard() {
         fetchRevenueData(),
         fetchVehicleTypeData(),
         fetchAreaPerformance(),
-        fetchRecentTransactions()
+        fetchTransactions()
       ])
     } catch (error) {
       console.error("Error fetching report data:", error)
@@ -86,61 +237,48 @@ export default function OwnerDashboard() {
     }
   }
 
-  const getDateFilter = () => {
-    const now = new Date()
-    let start = new Date()
-
-    switch(dateRange) {
-      case "today":
-        start.setHours(0, 0, 0, 0)
-        return { start, end: now }
-      
-      case "week":
-        start.setDate(now.getDate() - 7)
-        return { start, end: now }
-      
-      case "month":
-        start.setMonth(now.getMonth() - 1)
-        return { start, end: now }
-      
-      case "year":
-        start.setFullYear(now.getFullYear() - 1)
-        return { start, end: now }
-      
-      case "custom":
-        return {
-          start: startDate ? new Date(startDate) : new Date(now.setMonth(now.getMonth() - 1)),
-          end: endDate ? new Date(endDate) : now
-        }
-      
-      default:
-        start.setDate(now.getDate() - 7)
-        return { start, end: now }
-    }
-  }
-
   const fetchSummary = async () => {
     try {
       const dateFilter = getDateFilter()
+      const startUTC = new Date(dateFilter.start.getTime() - (7 * 60 * 60 * 1000))
+      const endUTC = new Date(dateFilter.end.getTime() - (7 * 60 * 60 * 1000))
 
-      const { data: pendapatanData } = await supabase
+      let query = supabase
         .from("tb_transaksi")
-        .select("biaya_total")
-        .gte("waktu_keluar", dateFilter.start.toISOString())
-        .lte("waktu_keluar", dateFilter.end.toISOString())
+        .select("biaya_total, tb_kendaraan!inner(jenis_kendaraan)")
+        .gte("waktu_keluar", startUTC.toISOString())
+        .lte("waktu_keluar", endUTC.toISOString())
         .eq("status", "keluar")
+
+      if (filterJenis !== "all") {
+        query = query.eq("tb_kendaraan.jenis_kendaraan", filterJenis)
+      }
+
+      const { data: pendapatanData } = await query
 
       const totalPendapatan = pendapatanData?.reduce((sum, item) => sum + (item.biaya_total || 0), 0) || 0
 
-      const { count: totalKendaraan } = await supabase
+      let countQuery = supabase
         .from("tb_transaksi")
         .select("*", { count: 'exact', head: true })
-        .gte("waktu_masuk", dateFilter.start.toISOString())
-        .lte("waktu_masuk", dateFilter.end.toISOString())
+        .gte("waktu_masuk", startUTC.toISOString())
+        .lte("waktu_masuk", endUTC.toISOString())
 
-      const { count: totalUser } = await supabase
-        .from("tb_user")
-        .select("*", { count: 'exact', head: true })
+      if (filterJenis !== "all") {
+        const { data: kendaraanIds } = await supabase
+          .from("tb_kendaraan")
+          .select("id_kendaraan")
+          .eq("jenis_kendaraan", filterJenis)
+        
+        const ids = kendaraanIds?.map(k => k.id_kendaraan) || []
+        if (ids.length > 0) {
+          countQuery = countQuery.in("id_kendaraan", ids)
+        } else {
+          countQuery = countQuery.eq("id_kendaraan", 0)
+        }
+      }
+
+      const { count: totalKendaraan } = await countQuery
 
       const { count: totalArea } = await supabase
         .from("tb_area_parkir")
@@ -149,20 +287,10 @@ export default function OwnerDashboard() {
       const hariDiff = Math.ceil((dateFilter.end - dateFilter.start) / (1000 * 60 * 60 * 24)) || 1
       const rataRataPerHari = totalPendapatan / hariDiff
 
-      const { data: areas } = await supabase
-        .from("tb_area_parkir")
-        .select("kapasitas, terisi")
-
-      const totalKapasitas = areas?.reduce((sum, area) => sum + area.kapasitas, 0) || 0
-      const totalTerisi = areas?.reduce((sum, area) => sum + area.terisi, 0) || 0
-      const okupansiRataRata = totalKapasitas > 0 ? (totalTerisi / totalKapasitas) * 100 : 0
-
       setSummary({
         totalPendapatan,
         totalKendaraan: totalKendaraan || 0,
         rataRataPerHari,
-        okupansiRataRata,
-        totalUser: totalUser || 0,
         totalArea: totalArea || 0
       })
     } catch (error) {
@@ -173,20 +301,29 @@ export default function OwnerDashboard() {
   const fetchRevenueData = async () => {
     try {
       const dateFilter = getDateFilter()
+      const startUTC = new Date(dateFilter.start.getTime() - (7 * 60 * 60 * 1000))
+      const endUTC = new Date(dateFilter.end.getTime() - (7 * 60 * 60 * 1000))
       
-      const { data, error } = await supabase
+      let query = supabase
         .from("tb_transaksi")
-        .select("waktu_keluar, biaya_total")
-        .gte("waktu_keluar", dateFilter.start.toISOString())
-        .lte("waktu_keluar", dateFilter.end.toISOString())
+        .select("waktu_keluar, biaya_total, tb_kendaraan!inner(jenis_kendaraan)")
+        .gte("waktu_keluar", startUTC.toISOString())
+        .lte("waktu_keluar", endUTC.toISOString())
         .eq("status", "keluar")
         .order("waktu_keluar", { ascending: true })
+
+      if (filterJenis !== "all") {
+        query = query.eq("tb_kendaraan.jenis_kendaraan", filterJenis)
+      }
+
+      const { data, error } = await query
 
       if (error) throw error
 
       const groupedData = {}
       data?.forEach(item => {
-        const date = new Date(item.waktu_keluar).toLocaleDateString('id-ID', { weekday: 'short', day: 'numeric' })
+        const wibDate = new Date(new Date(item.waktu_keluar).getTime() + (7 * 60 * 60 * 1000))
+        const date = wibDate.toLocaleDateString('id-ID', { weekday: 'short', day: 'numeric' })
         if (!groupedData[date]) {
           groupedData[date] = { name: date, pendapatan: 0, kendaraan: 0 }
         }
@@ -203,8 +340,10 @@ export default function OwnerDashboard() {
   const fetchVehicleTypeData = async () => {
     try {
       const dateFilter = getDateFilter()
+      const startUTC = new Date(dateFilter.start.getTime() - (7 * 60 * 60 * 1000))
+      const endUTC = new Date(dateFilter.end.getTime() - (7 * 60 * 60 * 1000))
 
-      const { data, error } = await supabase
+      let query = supabase
         .from("tb_transaksi")
         .select(`
           id_kendaraan,
@@ -212,8 +351,10 @@ export default function OwnerDashboard() {
             jenis_kendaraan
           )
         `)
-        .gte("waktu_masuk", dateFilter.start.toISOString())
-        .lte("waktu_masuk", dateFilter.end.toISOString())
+        .gte("waktu_masuk", startUTC.toISOString())
+        .lte("waktu_masuk", endUTC.toISOString())
+
+      const { data, error } = await query
 
       if (error) throw error
 
@@ -221,7 +362,7 @@ export default function OwnerDashboard() {
       data?.forEach(item => {
         const jenis = item.tb_kendaraan?.jenis_kendaraan || 'lainnya'
         if (!groupedData[jenis]) {
-          groupedData[jenis] = { name: jenis, value: 0 }
+          groupedData[jenis] = { name: jenis === 'motor' ? 'Motor' : jenis === 'mobil' ? 'Mobil' : 'Lainnya', value: 0 }
         }
         groupedData[jenis].value += 1
       })
@@ -235,6 +376,8 @@ export default function OwnerDashboard() {
   const fetchAreaPerformance = async () => {
     try {
       const dateFilter = getDateFilter()
+      const startUTC = new Date(dateFilter.start.getTime() - (7 * 60 * 60 * 1000))
+      const endUTC = new Date(dateFilter.end.getTime() - (7 * 60 * 60 * 1000))
 
       const { data: areas, error: areasError } = await supabase
         .from("tb_area_parkir")
@@ -243,21 +386,25 @@ export default function OwnerDashboard() {
       if (areasError) throw areasError
 
       const performance = await Promise.all(areas.map(async (area) => {
-        const { data: transaksi } = await supabase
+        let query = supabase
           .from("tb_transaksi")
-          .select("biaya_total")
+          .select("biaya_total, tb_kendaraan!inner(jenis_kendaraan)")
           .eq("id_area", area.id_area)
           .eq("status", "keluar")
-          .gte("waktu_keluar", dateFilter.start.toISOString())
-          .lte("waktu_keluar", dateFilter.end.toISOString())
+          .gte("waktu_keluar", startUTC.toISOString())
+          .lte("waktu_keluar", endUTC.toISOString())
+
+        if (filterJenis !== "all") {
+          query = query.eq("tb_kendaraan.jenis_kendaraan", filterJenis)
+        }
+
+        const { data: transaksi } = await query
 
         const pendapatan = transaksi?.reduce((sum, item) => sum + (item.biaya_total || 0), 0) || 0
-        const okupansi = (area.terisi / area.kapasitas) * 100
 
         return {
           ...area,
-          pendapatan,
-          okupansi
+          pendapatan
         }
       }))
 
@@ -272,9 +419,9 @@ export default function OwnerDashboard() {
     }
   }
 
-  const fetchRecentTransactions = async () => {
+  const fetchTransactions = async () => {
     try {
-      const { data, error } = await supabase
+      let query = supabase
         .from("tb_transaksi")
         .select(`
           id_parkir,
@@ -292,12 +439,13 @@ export default function OwnerDashboard() {
           )
         `)
         .order("waktu_masuk", { ascending: false })
-        .limit(10)
+
+      const { data, error } = await query
 
       if (error) throw error
-      setRecentTransactions(data || [])
+      setTransactions(data || [])
     } catch (error) {
-      console.error("Error fetching recent transactions:", error)
+      console.error("Error fetching transactions:", error)
     }
   }
 
@@ -310,7 +458,9 @@ export default function OwnerDashboard() {
   }
 
   const formatDate = (date) => {
-    return new Date(date).toLocaleDateString('id-ID', {
+    if (!date) return '-'
+    const wibDate = new Date(new Date(date).getTime() + (7 * 60 * 60 * 1000))
+    return wibDate.toLocaleDateString('id-ID', {
       day: '2-digit',
       month: 'short',
       year: 'numeric',
@@ -320,119 +470,194 @@ export default function OwnerDashboard() {
   }
 
   const formatDateForExport = (date) => {
-    return new Date(date).toLocaleDateString('id-ID', {
+    if (!date) return ''
+    const wibDate = new Date(new Date(date).getTime() + (7 * 60 * 60 * 1000))
+    return wibDate.toLocaleDateString('id-ID', {
       day: '2-digit',
       month: '2-digit',
-      year: 'numeric'
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
     })
   }
 
   const getDateRangeText = () => {
     const filter = getDateFilter()
-    const start = formatDateForExport(filter.start)
-    const end = formatDateForExport(filter.end)
+    const start = formatDateDisplay(filter.start)
+    const end = formatDateDisplay(filter.end)
     
     switch(dateRange) {
       case "today": return `Hari Ini (${start})`
       case "week": return `7 Hari Terakhir (${start} - ${end})`
       case "month": return `30 Hari Terakhir (${start} - ${end})`
       case "year": return `Tahun Ini (${start} - ${end})`
-      case "custom": return `Kustom (${start} - ${end})`
+      case "custom": return `${start} - ${end}`
       default: return `${start} - ${end}`
     }
   }
 
-  // Fungsi Export ke Excel (CSV)
-  const handleExportExcel = () => {
+  const resetFilters = () => {
+    setDateRange("week")
+    setStartDate(null)
+    setEndDate(null)
+    setFilterJenis("all")
+    showNotification("Filter direset ke 7 hari terakhir", "success")
+  }
+
+  // Validasi tanggal
+  const handleStartDateChange = (date) => {
+    setStartDate(date)
+    if (endDate && date > endDate) {
+      setEndDate(null)
+      showNotification("Tanggal mulai tidak boleh lebih besar dari tanggal akhir", "error")
+    }
+  }
+
+  const handleEndDateChange = (date) => {
+    if (startDate && date < startDate) {
+      showNotification("Tanggal akhir tidak boleh kurang dari tanggal mulai", "error")
+      return
+    }
+    setEndDate(date)
+  }
+
+// Export ke Excel dengan auto fit column
+const handleExportExcel = () => {
+  setExporting(true)
+  try {
+    const data = []
+    
+    // Header
+    data.push(['REKAP TRANSAKSI SISTEM PARKIR'])
+    data.push([])
+    data.push(['Periode:', getDateRangeText()])
+    data.push(['Jenis Kendaraan:', filterJenis === 'all' ? 'Semua Jenis' : filterJenis === 'motor' ? 'Motor' : filterJenis === 'mobil' ? 'Mobil' : 'Lainnya'])
+    data.push(['Tanggal Export:', new Date().toLocaleDateString('id-ID', {
+      day: '2-digit',
+      month: 'long',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    })])
+    data.push([])
+    
+    // Ringkasan
+    data.push(['RINGKASAN'])
+    data.push(['Total Pendapatan', formatRupiah(summary.totalPendapatan)])
+    data.push(['Total Kendaraan', summary.totalKendaraan.toString()])
+    data.push(['Rata-rata per Hari', formatRupiah(summary.rataRataPerHari)])
+    data.push([])
+    
+    // Data Transaksi
+    data.push(['DATA TRANSAKSI'])
+    data.push([
+      'No', 
+      'Tanggal Masuk', 
+      'Tanggal Keluar', 
+      'Plat Nomor', 
+      'Jenis Kendaraan', 
+      'Area Parkir', 
+      'Durasi (Jam)', 
+      'Biaya', 
+      'Status'
+    ])
+    
+    filteredTransactions.forEach((item, index) => {
+      data.push([
+        (index + 1).toString(),
+        formatDateForExport(item.waktu_masuk),
+        item.waktu_keluar ? formatDateForExport(item.waktu_keluar) : '-',
+        item.tb_kendaraan?.plat_nomor || '-',
+        item.tb_kendaraan?.jenis_kendaraan || '-',
+        item.tb_area_parkir?.nama_area || '-',
+        item.durasi_jam ? item.durasi_jam.toString() : '-',
+        item.biaya_total ? formatRupiah(item.biaya_total) : '-',
+        item.status === 'masuk' ? 'Masuk' : 'Keluar'
+      ])
+    })
+    
+    const ws = XLSX.utils.aoa_to_sheet(data)
+    
+    // Hitung lebar maksimum untuk setiap kolom
+    const maxWidths = []
+    data.forEach(row => {
+      row.forEach((cell, colIndex) => {
+        if (cell) {
+          const cellLength = String(cell).length
+          if (!maxWidths[colIndex] || cellLength > maxWidths[colIndex]) {
+            maxWidths[colIndex] = Math.min(cellLength + 2, 50) // Maksimal 50 karakter
+          }
+        }
+      })
+    })
+    
+    // Set lebar kolom berdasarkan panjang teks maksimal
+    ws['!cols'] = maxWidths.map(width => ({ wch: width }))
+    
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Rekap Transaksi')
+    XLSX.writeFile(wb, `Rekap_Transaksi_${new Date().toISOString().split('T')[0]}.xlsx`)
+    
+    showNotification("Rekap transaksi berhasil diexport ke Excel", "success")
+  } catch (error) {
+    console.error('Error exporting to Excel:', error)
+    showNotification("Gagal mengexport rekap transaksi", "error")
+  } finally {
+    setExporting(false)
+  }
+}
+
+  // Print ke PDF
+  const handlePrintPdf = () => {
+    if (!reportRef.current) return
+    
     setExporting(true)
     try {
-      // Data untuk diexport
-      const exportData = [
-        // Summary Data
-        ['LAPORAN SISTEM PARKIR'],
-        [`Periode: ${getDateRangeText()}`],
-        [`Tanggal Export: ${new Date().toLocaleDateString('id-ID')}`],
-        [],
-        ['RINGKASAN'],
-        ['Total Pendapatan', formatRupiah(summary.totalPendapatan)],
-        ['Total Kendaraan', summary.totalKendaraan],
-        ['Rata-rata per Hari', formatRupiah(summary.rataRataPerHari)],
-        ['Okupansi Rata-rata', `${summary.okupansiRataRata.toFixed(1)}%`],
-        ['Total User', summary.totalUser],
-        ['Total Area', summary.totalArea],
-        [],
-        ['PERFORMA AREA PARKIR'],
-        ['Area', 'Kapasitas', 'Terisi', 'Okupansi', 'Pendapatan']
-      ]
-
-      // Add area performance data
-      areaPerformance.forEach(area => {
-        exportData.push([
-          area.nama_area,
-          area.kapasitas,
-          area.terisi,
-          `${area.okupansi.toFixed(1)}%`,
-          formatRupiah(area.pendapatan)
-        ])
-      })
-
-      exportData.push([], ['TRANSAKSI TERBARU'])
-      exportData.push(['No', 'Waktu', 'Plat Nomor', 'Jenis', 'Area', 'Durasi', 'Biaya', 'Status'])
-
-      // Add transaction data
-      recentTransactions.forEach((item, index) => {
-        exportData.push([
-          index + 1,
-          formatDate(item.waktu_masuk),
-          item.tb_kendaraan?.plat_nomor || '-',
-          item.tb_kendaraan?.jenis_kendaraan || '-',
-          item.tb_area_parkir?.nama_area || '-',
-          item.durasi_jam ? `${item.durasi_jam} jam` : '-',
-          item.biaya_total ? formatRupiah(item.biaya_total) : '-',
-          item.status === 'masuk' ? 'Masuk' : 'Keluar'
-        ])
-      })
-
-      // Convert to CSV
-      const csvContent = exportData.map(row => 
-        row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(',')
-      ).join('\n')
-
-      // Download file
-      const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' })
-      const link = document.createElement('a')
-      const url = URL.createObjectURL(blob)
-      link.href = url
-      link.setAttribute('download', `laporan_parkir_${new Date().toISOString().split('T')[0]}.csv`)
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
-      URL.revokeObjectURL(url)
-
-      alert('Laporan berhasil diexport ke Excel (CSV)')
+      const originalTitle = document.title
+      document.title = `Rekap_Transaksi_${new Date().toISOString().split('T')[0]}`
+      
+      window.print()
+      
+      setTimeout(() => {
+        document.title = originalTitle
+        setExporting(false)
+      }, 1000)
     } catch (error) {
-      console.error('Error exporting to Excel:', error)
-      alert('Gagal mengexport laporan')
-    } finally {
+      console.error('Error printing:', error)
+      showNotification('Gagal mencetak rekap transaksi', 'error')
       setExporting(false)
     }
   }
 
-  // Fungsi Export ke PDF (print to PDF)
-  const handlePrintPdf = useReactToPrint({
-    content: () => reportRef.current,
-    documentTitle: `Laporan_Parkir_${new Date().toISOString().split('T')[0]}`,
-    onBeforePrint: () => setExporting(true),
-    onAfterPrint: () => setExporting(false),
-    onPrintError: () => {
-      alert('Gagal mencetak laporan')
-      setExporting(false)
+  const handleLogout = async () => {
+    try {
+      localStorage.removeItem("currentUser")
+      localStorage.removeItem("isLoggedIn")
+      showNotification("Berhasil keluar", "success")
+      setTimeout(() => {
+        router.push("/login")
+      }, 1000)
+    } catch (error) {
+      console.error("Logout error:", error)
+      showNotification("Gagal keluar", "error")
     }
-  })
+  }
 
-  // Fungsi Print biasa
-  const handlePrint = () => {
-    window.print()
+  const getJenisIcon = (jenis) => {
+    switch(jenis?.toLowerCase()) {
+      case 'mobil': return <FaCar className="text-blue-500" />
+      case 'motor': return <FaMotorcycle className="text-green-500" />
+      case 'lainnya': return <FaTruck className="text-orange-500" />
+      default: return <FaCar />
+    }
+  }
+
+  if (authChecking) {
+    return (
+      <div className="min-h-screen bg-gray-100 flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-purple-600"></div>
+      </div>
+    )
   }
 
   if (loading) {
@@ -445,24 +670,34 @@ export default function OwnerDashboard() {
 
   return (
     <div className="min-h-screen bg-gray-100">
+      {/* Notifikasi */}
+      {notification.show && (
+        <div className={`fixed bottom-4 right-4 z-50 px-6 py-3 rounded-lg shadow-lg text-white ${
+          notification.type === "success" ? "bg-green-500" : "bg-red-500"
+        } animate-slide-in-right`}>
+          {notification.message}
+        </div>
+      )}
+
       {/* Navbar */}
-      <nav className="bg-gradient-to-r from-purple-600 to-purple-700 text-white shadow-lg print:bg-gray-800">
+      <nav className="bg-gradient-to-r from-purple-600 to-purple-700 text-white shadow-lg print:hidden">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
             <div className="flex items-center space-x-2">
               <FaBuilding className="text-2xl" />
-              <h1 className="text-xl font-bold">Sistem Parkir - Owner Dashboard</h1>
+              <h1 className="text-xl font-bold">Sistem Parkir - Dashboard Owner</h1>
             </div>
-            <div className="flex items-center space-x-4 print:hidden">
+            <div className="flex items-center space-x-4">
               <div className="flex items-center space-x-2 bg-white/10 px-3 py-1 rounded-lg">
                 <FaUsers className="text-purple-200" />
-                <span className="text-sm">Owner</span>
+                <span className="text-sm">{currentUser?.nama_lengkap || "Owner"}</span>
               </div>
               <button
-                onClick={() => router.push("/")}
-                className="bg-red-500 hover:bg-red-600 px-4 py-2 rounded-lg text-sm transition"
+                onClick={handleLogout}
+                className="bg-red-500 hover:bg-red-600 px-4 py-2 rounded-lg text-sm transition flex items-center gap-2"
               >
-                Logout
+                <FaSignOutAlt />
+                Keluar
               </button>
             </div>
           </div>
@@ -473,13 +708,20 @@ export default function OwnerDashboard() {
       <div ref={reportRef}>
         {/* Header untuk Print */}
         <div className="hidden print:block text-center mb-8">
-          <h1 className="text-2xl font-bold">Laporan Sistem Parkir</h1>
+          <h1 className="text-2xl font-bold">Rekap Transaksi Sistem Parkir</h1>
           <p>Periode: {getDateRangeText()}</p>
-          <p>Tanggal Cetak: {new Date().toLocaleDateString('id-ID')}</p>
+          <p>Jenis Kendaraan: {filterJenis === 'all' ? 'Semua Jenis' : filterJenis === 'motor' ? 'Motor' : filterJenis === 'mobil' ? 'Mobil' : 'Lainnya'}</p>
+          <p>Tanggal Cetak: {new Date().toLocaleDateString('id-ID', {
+            day: '2-digit',
+            month: 'long',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+          })}</p>
         </div>
 
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-          {/* Filter Section - Hidden saat print */}
+          {/* Filter Section */}
           <div className="bg-white rounded-lg shadow p-6 mb-6 print:hidden">
             <div className="flex flex-wrap items-center justify-between gap-4">
               <div>
@@ -495,46 +737,67 @@ export default function OwnerDashboard() {
                     onChange={(e) => setDateRange(e.target.value)}
                     className="border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500 text-gray-900"
                   >
-                    <option value="today" className="text-gray-900">Hari Ini</option>
-                    <option value="week" className="text-gray-900">7 Hari Terakhir</option>
-                    <option value="month" className="text-gray-900">30 Hari Terakhir</option>
-                    <option value="year" className="text-gray-900">Tahun Ini</option>
-                    <option value="custom" className="text-gray-900">Kustom</option>
+                    <option value="today">Hari Ini</option>
+                    <option value="week">7 Hari Terakhir</option>
+                    <option value="month">30 Hari Terakhir</option>
+                    <option value="year">Tahun Ini</option>
+                    <option value="custom">Kustom</option>
+                  </select>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <FaList className="text-gray-400" />
+                  <select
+                    value={filterJenis}
+                    onChange={(e) => setFilterJenis(e.target.value)}
+                    className="border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500 text-gray-900"
+                  >
+                    <option value="all">Semua Jenis</option>
+                    <option value="motor">Motor</option>
+                    <option value="mobil">Mobil</option>
+                    <option value="lainnya">Lainnya</option>
                   </select>
                 </div>
 
                 {dateRange === 'custom' && (
                   <div className="flex items-center gap-2">
-                    <input
-                      type="date"
-                      value={startDate}
-                      onChange={(e) => setStartDate(e.target.value)}
+                    <DatePicker
+                      selected={startDate}
+                      onChange={handleStartDateChange}
+                      dateFormat="dd MMMM yyyy"
+                      locale={id}
+                      placeholderText="Tanggal Mulai"
                       className="border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500 text-gray-900"
                     />
                     <span className="text-gray-600">-</span>
-                    <input
-                      type="date"
-                      value={endDate}
-                      onChange={(e) => setEndDate(e.target.value)}
+                    <DatePicker
+                      selected={endDate}
+                      onChange={handleEndDateChange}
+                      dateFormat="dd MMMM yyyy"
+                      locale={id}
+                      placeholderText="Tanggal Akhir"
                       className="border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500 text-gray-900"
+                      minDate={startDate}
                     />
                   </div>
                 )}
 
-                <button
-                  onClick={fetchReportData}
-                  className="bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition flex items-center gap-2"
-                >
-                  <FaChartLine />
-                  Terapkan
-                </button>
+                {(dateRange !== "week" || startDate || endDate || filterJenis !== "all") && (
+                  <button
+                    onClick={resetFilters}
+                    className="bg-gray-500 text-white px-4 py-2 rounded-lg hover:bg-gray-600 transition flex items-center gap-2"
+                  >
+                    <FaUndo />
+                    Reset
+                  </button>
+                )}
               </div>
             </div>
 
             {/* Export Buttons */}
             <div className="flex items-center gap-2 mt-4 pt-4 border-t border-gray-200">
               <FaFileExport className="text-gray-500" />
-              <span className="text-sm text-gray-600">Export Laporan:</span>
+              <span className="text-sm text-gray-600">Export Rekap Transaksi:</span>
               <button
                 onClick={handlePrintPdf}
                 disabled={exporting}
@@ -551,18 +814,11 @@ export default function OwnerDashboard() {
                 {exporting ? <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></div> : <FaFileExcel />}
                 Excel
               </button>
-              <button
-                onClick={handlePrint}
-                className="bg-gray-500 text-white px-3 py-1 rounded text-sm hover:bg-gray-600 transition flex items-center gap-1"
-              >
-                <FaPrint />
-                Print
-              </button>
             </div>
           </div>
 
           {/* Summary Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4 mb-6 print:grid-cols-3">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6 print:grid-cols-2">
             <div className="bg-white rounded-lg shadow p-4 print:shadow-none print:border print:border-gray-300">
               <div className="flex items-center justify-between">
                 <div>
@@ -586,30 +842,10 @@ export default function OwnerDashboard() {
             <div className="bg-white rounded-lg shadow p-4 print:shadow-none print:border print:border-gray-300">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-xs text-gray-600">Rata-rata/Hari</p>
+                  <p className="text-xs text-gray-600">Rata-rata per Hari</p>
                   <p className="text-lg font-bold text-gray-900">{formatRupiah(summary.rataRataPerHari)}</p>
                 </div>
                 <FaWallet className="text-2xl text-green-500" />
-              </div>
-            </div>
-
-            <div className="bg-white rounded-lg shadow p-4 print:shadow-none print:border print:border-gray-300">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-xs text-gray-600">Okupansi</p>
-                  <p className="text-lg font-bold text-gray-900">{summary.okupansiRataRata.toFixed(1)}%</p>
-                </div>
-                <FaChartBar className="text-2xl text-yellow-500" />
-              </div>
-            </div>
-
-            <div className="bg-white rounded-lg shadow p-4 print:shadow-none print:border print:border-gray-300">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-xs text-gray-600">Total User</p>
-                  <p className="text-lg font-bold text-gray-900">{summary.totalUser}</p>
-                </div>
-                <FaUsers className="text-2xl text-indigo-500" />
               </div>
             </div>
 
@@ -626,7 +862,6 @@ export default function OwnerDashboard() {
 
           {/* Charts Grid */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6 print:grid-cols-1">
-            {/* Grafik Pendapatan */}
             <div className="bg-white rounded-lg shadow p-6 print:shadow-none print:border print:border-gray-300">
               <h3 className="text-lg font-semibold text-gray-800 mb-4">Tren Pendapatan</h3>
               {revenueData.length > 0 ? (
@@ -635,21 +870,17 @@ export default function OwnerDashboard() {
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis dataKey="name" tick={{ fill: '#374151' }} />
                     <YAxis tick={{ fill: '#374151' }} />
-                    <Tooltip 
-                      formatter={(value) => formatRupiah(value)}
-                      contentStyle={{ color: '#111827' }}
-                    />
+                    <Tooltip formatter={(value) => formatRupiah(value)} />
                     <Legend />
                     <Line type="monotone" dataKey="pendapatan" stroke="#3B82F6" name="Pendapatan" />
                     <Line type="monotone" dataKey="kendaraan" stroke="#10B981" name="Kendaraan" />
                   </LineChart>
                 </ResponsiveContainer>
               ) : (
-                <div className="text-center text-gray-500 py-12">Tidak ada data untuk ditampilkan</div>
+                <div className="text-center text-gray-500 py-12">Tidak ada data</div>
               )}
             </div>
 
-            {/* Grafik Jenis Kendaraan */}
             <div className="bg-white rounded-lg shadow p-6 print:shadow-none print:border print:border-gray-300">
               <h3 className="text-lg font-semibold text-gray-800 mb-4">Komposisi Jenis Kendaraan</h3>
               {vehicleTypeData.length > 0 ? (
@@ -669,18 +900,17 @@ export default function OwnerDashboard() {
                         <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                       ))}
                     </Pie>
-                    <Tooltip 
-                      contentStyle={{ color: '#111827' }}
-                    />
+                    <Tooltip />
+                    <Legend />
                   </PieChart>
                 </ResponsiveContainer>
               ) : (
-                <div className="text-center text-gray-500 py-12">Tidak ada data untuk ditampilkan</div>
+                <div className="text-center text-gray-500 py-12">Tidak ada data</div>
               )}
             </div>
           </div>
 
-          {/* Top Performing Areas */}
+          {/* Area Performance */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6 print:grid-cols-1">
             <div className="lg:col-span-2 bg-white rounded-lg shadow p-6 print:shadow-none print:border print:border-gray-300">
               <h3 className="text-lg font-semibold text-gray-800 mb-4">Performa Area Parkir</h3>
@@ -691,7 +921,6 @@ export default function OwnerDashboard() {
                       <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Area</th>
                       <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Kapasitas</th>
                       <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Terisi</th>
-                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Okupansi</th>
                       <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Pendapatan</th>
                     </tr>
                   </thead>
@@ -701,21 +930,6 @@ export default function OwnerDashboard() {
                         <td className="px-4 py-2 text-sm font-medium text-gray-900">{area.nama_area}</td>
                         <td className="px-4 py-2 text-sm text-gray-900">{area.kapasitas}</td>
                         <td className="px-4 py-2 text-sm text-gray-900">{area.terisi}</td>
-                        <td className="px-4 py-2 text-sm">
-                          <div className="flex items-center gap-2">
-                            <div className="w-16 bg-gray-200 rounded-full h-2">
-                              <div 
-                                className={`h-2 rounded-full ${
-                                  area.okupansi > 80 ? 'bg-red-500' : 
-                                  area.okupansi > 50 ? 'bg-yellow-500' : 
-                                  'bg-green-500'
-                                }`}
-                                style={{ width: `${area.okupansi}%` }}
-                              ></div>
-                            </div>
-                            <span className="text-gray-900">{area.okupansi.toFixed(1)}%</span>
-                          </div>
-                        </td>
                         <td className="px-4 py-2 text-sm text-gray-900 font-medium">
                           {formatRupiah(area.pendapatan)}
                         </td>
@@ -726,7 +940,6 @@ export default function OwnerDashboard() {
               </div>
             </div>
 
-            {/* Top 5 Areas by Revenue */}
             <div className="bg-white rounded-lg shadow p-6 print:shadow-none print:border print:border-gray-300">
               <h3 className="text-lg font-semibold text-gray-800 mb-4">Top 5 Area by Revenue</h3>
               <div className="space-y-4">
@@ -754,17 +967,22 @@ export default function OwnerDashboard() {
             </div>
           </div>
 
-          {/* Recent Transactions */}
+          {/* Transaksi - Mengikuti Filter */}
           <div className="bg-white rounded-lg shadow p-6 print:shadow-none print:border print:border-gray-300">
             <div className="flex justify-between items-center mb-4">
-              <h3 className="text-lg font-semibold text-gray-800">Transaksi Terbaru</h3>
+              <h3 className="text-lg font-semibold text-gray-800">Rekap Transaksi</h3>
+              <div className="flex items-center gap-2 text-sm text-gray-500">
+                <FaExchangeAlt />
+                <span>{filteredTransactions.length} transaksi ditemukan</span>
+              </div>
             </div>
             
             <div className="overflow-x-auto">
               <table className="min-w-full">
                 <thead className="bg-gray-50">
                   <tr>
-                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Waktu</th>
+                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Waktu Masuk</th>
+                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Waktu Keluar</th>
                     <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Plat Nomor</th>
                     <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Jenis</th>
                     <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Area</th>
@@ -774,31 +992,18 @@ export default function OwnerDashboard() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200">
-                  {recentTransactions.length > 0 ? recentTransactions.map(item => (
+                  {filteredTransactions.length > 0 ? filteredTransactions.slice(0, 20).map(item => (
                     <tr key={item.id_parkir}>
-                      <td className="px-4 py-2 text-sm text-gray-900">
-                        {formatDate(item.waktu_masuk)}
-                      </td>
-                      <td className="px-4 py-2 text-sm font-medium text-gray-900">
-                        {item.tb_kendaraan?.plat_nomor}
-                      </td>
-                      <td className="px-4 py-2 text-sm text-gray-900 capitalize">
-                        {item.tb_kendaraan?.jenis_kendaraan}
-                      </td>
-                      <td className="px-4 py-2 text-sm text-gray-900">
-                        {item.tb_area_parkir?.nama_area}
-                      </td>
-                      <td className="px-4 py-2 text-sm text-gray-900">
-                        {item.durasi_jam ? `${item.durasi_jam} jam` : '-'}
-                      </td>
-                      <td className="px-4 py-2 text-sm text-gray-900 font-medium">
-                        {item.biaya_total ? formatRupiah(item.biaya_total) : '-'}
-                      </td>
+                      <td className="px-4 py-2 text-sm text-gray-900">{formatDate(item.waktu_masuk)}</td>
+                      <td className="px-4 py-2 text-sm text-gray-900">{item.waktu_keluar ? formatDate(item.waktu_keluar) : '-'}</td>
+                      <td className="px-4 py-2 text-sm font-medium text-gray-900">{item.tb_kendaraan?.plat_nomor}</td>
+                      <td className="px-4 py-2 text-sm text-gray-900 capitalize">{item.tb_kendaraan?.jenis_kendaraan}</td>
+                      <td className="px-4 py-2 text-sm text-gray-900">{item.tb_area_parkir?.nama_area}</td>
+                      <td className="px-4 py-2 text-sm text-gray-900">{item.durasi_jam ? `${item.durasi_jam} jam` : '-'}</td>
+                      <td className="px-4 py-2 text-sm text-gray-900 font-medium">{item.biaya_total ? formatRupiah(item.biaya_total) : '-'}</td>
                       <td className="px-4 py-2">
                         <span className={`px-2 py-1 text-xs rounded-full ${
-                          item.status === 'masuk' 
-                            ? 'bg-green-100 text-green-800' 
-                            : 'bg-gray-100 text-gray-800'
+                          item.status === 'masuk' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
                         }`}>
                           {item.status === 'masuk' ? 'Masuk' : 'Keluar'}
                         </span>
@@ -806,8 +1011,8 @@ export default function OwnerDashboard() {
                     </tr>
                   )) : (
                     <tr>
-                      <td colSpan="7" className="text-center py-8 text-gray-500">
-                        Belum ada transaksi
+                      <td colSpan="8" className="text-center py-8 text-gray-500">
+                        Tidak ada transaksi pada periode yang dipilih
                       </td>
                     </tr>
                   )}
@@ -818,8 +1023,21 @@ export default function OwnerDashboard() {
         </div>
       </div>
 
-      {/* Print CSS untuk menyembunyikan elemen yang tidak diperlukan saat print */}
-      <style jsx global>{`
+      <style jsx>{`
+        @keyframes slideInRight {
+          from {
+            opacity: 0;
+            transform: translateX(100%);
+          }
+          to {
+            opacity: 1;
+            transform: translateX(0);
+          }
+        }
+        .animate-slide-in-right {
+          animation: slideInRight 0.3s ease-out;
+        }
+        
         @media print {
           .print\\:hidden {
             display: none !important;
@@ -830,8 +1048,8 @@ export default function OwnerDashboard() {
           .print\\:grid-cols-1 {
             grid-template-columns: repeat(1, minmax(0, 1fr)) !important;
           }
-          .print\\:grid-cols-3 {
-            grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+          .print\\:grid-cols-2 {
+            grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
           }
           .print\\:shadow-none {
             box-shadow: none !important;
