@@ -623,6 +623,8 @@ export default function PetugasDashboard() {
         return;
       }
 
+      const normalizedWarna = formData.warna.trim() || "-";
+
       let id_kendaraan;
       const { data: existingKendaraan } = await supabase
         .from("tb_kendaraan")
@@ -637,7 +639,7 @@ export default function PetugasDashboard() {
           .from("tb_kendaraan")
           .update({
             jenis_kendaraan: formData.jenis_kendaraan,
-            warna: formData.warna,
+            warna: normalizedWarna,
             pemilik: formData.pemilik,
             id_user: currentUser?.id,
           })
@@ -649,7 +651,7 @@ export default function PetugasDashboard() {
             {
               plat_nomor: formData.plat_nomor,
               jenis_kendaraan: formData.jenis_kendaraan,
-              warna: formData.warna,
+              warna: normalizedWarna,
               pemilik: formData.pemilik,
               id_user: currentUser?.id,
             },
@@ -963,7 +965,7 @@ export default function PetugasDashboard() {
             <div className="flex items-center space-x-2">
               <FaParking className="text-2xl" />
               <h1 className="text-xl font-bold">
-                Sistem Parkir - Dashboard Petugas
+                Sistem Parkir - Beranda Petugas
               </h1>
             </div>
             <div className="flex items-center space-x-4">
@@ -1436,14 +1438,12 @@ export default function PetugasDashboard() {
                               {item.tb_kendaraan?.jenis_kendaraan}
                             </span>
                           </div>
-                          {item.tb_kendaraan?.warna && (
-                            <div className="flex justify-between">
-                              <span className="text-gray-600">Warna:</span>
-                              <span className="text-gray-900">
-                                {item.tb_kendaraan?.warna}
-                              </span>
-                            </div>
-                          )}
+                          <div className="flex justify-between">
+                            <span className="text-gray-600">Warna:</span>
+                            <span className="text-gray-900">
+                              {item.tb_kendaraan?.warna || "-"}
+                            </span>
+                          </div>
                           <div className="flex justify-between">
                             <span className="text-gray-600">Waktu Masuk:</span>
                             <span className="text-gray-900 font-mono">
@@ -1753,12 +1753,8 @@ export default function PetugasDashboard() {
                       {paymentInfo.jenis_kendaraan}
                     </div>
 
-                    {paymentInfo.warna && paymentInfo.warna !== "-" && (
-                      <>
-                        <div className="text-gray-600">Warna</div>
-                        <div className="text-gray-900">{paymentInfo.warna}</div>
-                      </>
-                    )}
+                    <div className="text-gray-600">Warna</div>
+                    <div className="text-gray-900">{paymentInfo.warna || "-"}</div>
 
                     {paymentInfo.pemilik && paymentInfo.pemilik !== "-" && (
                       <>
@@ -1924,12 +1920,10 @@ export default function PetugasDashboard() {
                       {paymentInfo.jenis_kendaraan}
                     </span>
                   </div>
-                  {paymentInfo.warna && paymentInfo.warna !== "-" && (
-                    <div className="flex justify-between text-sm mt-1">
-                      <span className="text-black font-semibold">Warna</span>
-                      <span className="text-black">{paymentInfo.warna}</span>
-                    </div>
-                  )}
+                  <div className="flex justify-between text-sm mt-1">
+                    <span className="text-black font-semibold">Warna</span>
+                    <span className="text-black">{paymentInfo.warna || "-"}</span>
+                  </div>
                   {paymentInfo.pemilik && paymentInfo.pemilik !== "-" && (
                     <div className="flex justify-between text-sm mt-1">
                       <span className="text-black font-semibold">Pemilik</span>

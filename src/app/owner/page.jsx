@@ -806,7 +806,7 @@ export default function OwnerDashboard() {
             <div className="flex items-center space-x-2">
               <FaBuilding className="text-2xl" />
               <h1 className="text-xl font-bold">
-                Sistem Parkir - Dashboard Owner
+                Sistem Parkir - Beranda Owner
               </h1>
             </div>
             <div className="flex items-center space-x-4">

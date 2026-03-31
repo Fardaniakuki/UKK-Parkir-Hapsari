@@ -105,6 +105,8 @@ export default function AdminDashboard() {
     plat_nomor: "",
     warna: "",
     pemilik: "",
+    id_area: "",
+    id_tarif: "",
   });
 
   // Fungsi untuk menampilkan notifikasi
@@ -593,6 +595,11 @@ export default function AdminDashboard() {
     }));
   };
 
+  const getTarifByJenis = (jenisKendaraan) => {
+    const tarif = tarifs.find((item) => item.jenis_kendaraan === jenisKendaraan);
+    return tarif?.id_tarif || null;
+  };
+
   const openModal = (type, data = null) => {
     setModalType(type);
     if (data) {
@@ -613,6 +620,8 @@ export default function AdminDashboard() {
         plat_nomor: "",
         warna: "",
         pemilik: "",
+        id_area: "",
+        id_tarif: "",
       });
     }
     setShowModal(true);
@@ -714,19 +723,112 @@ export default function AdminDashboard() {
                 jenis_kendaraan: formData.jenis_kendaraan,
                 warna: formData.warna,
                 pemilik: formData.pemilik,
+                id_user: currentUser?.id,
               })
               .eq("id_kendaraan", editingData.id_kendaraan);
             aktivitas = `Mengupdate kendaraan: ${formData.plat_nomor}`;
           } else {
-            result = await supabase.from("tb_kendaraan").insert([
-              {
-                plat_nomor: formData.plat_nomor,
-                jenis_kendaraan: formData.jenis_kendaraan,
-                warna: formData.warna,
-                pemilik: formData.pemilik,
-              },
-            ]);
-            aktivitas = `Menambah kendaraan baru: ${formData.plat_nomor}`;
+            if (!formData.id_area) {
+              throw new Error("Pilih area parkir terlebih dahulu");
+            }
+
+            const selectedArea = areas.find(
+              (area) => area.id_area === parseInt(formData.id_area)
+            );
+
+            if (!selectedArea) {
+              throw new Error("Area parkir tidak ditemukan");
+            }
+
+            if (selectedArea.terisi >= selectedArea.kapasitas) {
+              throw new Error("Area parkir yang dipilih sudah penuh");
+            }
+
+            const tarifId =
+              formData.id_tarif || getTarifByJenis(formData.jenis_kendaraan);
+
+            if (!tarifId) {
+              throw new Error("Tarif untuk jenis kendaraan ini belum tersedia");
+            }
+
+            const { data: existingKendaraan, error: existingKendaraanError } =
+              await supabase
+                .from("tb_kendaraan")
+                .select("id_kendaraan")
+                .eq("plat_nomor", formData.plat_nomor)
+                .maybeSingle();
+
+            if (existingKendaraanError) throw existingKendaraanError;
+
+            let kendaraanId = existingKendaraan?.id_kendaraan;
+
+            if (kendaraanId) {
+              const { data: activeTransaksi, error: activeTransaksiError } =
+                await supabase
+                  .from("tb_transaksi")
+                  .select("id_parkir")
+                  .eq("id_kendaraan", kendaraanId)
+                  .eq("status", "masuk")
+                  .maybeSingle();
+
+              if (activeTransaksiError) throw activeTransaksiError;
+
+              if (activeTransaksi) {
+                throw new Error("Kendaraan ini masih tercatat sedang parkir");
+              }
+
+              result = await supabase
+                .from("tb_kendaraan")
+                .update({
+                  jenis_kendaraan: formData.jenis_kendaraan,
+                  warna: formData.warna,
+                  pemilik: formData.pemilik,
+                  id_user: currentUser?.id,
+                })
+                .eq("id_kendaraan", kendaraanId);
+            } else {
+              result = await supabase
+                .from("tb_kendaraan")
+                .insert([
+                  {
+                    plat_nomor: formData.plat_nomor,
+                    jenis_kendaraan: formData.jenis_kendaraan,
+                    warna: formData.warna,
+                    pemilik: formData.pemilik,
+                    id_user: currentUser?.id,
+                  },
+                ])
+                .select()
+                .single();
+
+              kendaraanId = result.data?.id_kendaraan;
+            }
+
+            if (result.error) throw result.error;
+
+            const { error: transaksiError } = await supabase
+              .from("tb_transaksi")
+              .insert([
+                {
+                  id_kendaraan: kendaraanId,
+                  waktu_masuk: new Date().toISOString(),
+                  id_tarif: tarifId,
+                  status: "masuk",
+                  id_user: currentUser?.id,
+                  id_area: parseInt(formData.id_area),
+                },
+              ]);
+
+            if (transaksiError) throw transaksiError;
+
+            const { error: incrementError } = await supabase.rpc(
+              "increment_terisi",
+              { area_id: parseInt(formData.id_area) }
+            );
+
+            if (incrementError) throw incrementError;
+
+            aktivitas = `Menambah kendaraan masuk: ${formData.plat_nomor} ke ${selectedArea.nama_area}`;
           }
           break;
       }
@@ -961,7 +1063,7 @@ export default function AdminDashboard() {
         </aside>
 
         <main className="flex-1 p-8">
-          {/* Dashboard Tab */}
+          {/* Beranda Tab */}
           {activeTab === "dashboard" && (
             <div>
               <h2 className="text-2xl font-bold text-gray-800 mb-6">Beranda</h2>
@@ -2127,6 +2229,38 @@ export default function AdminDashboard() {
                       />
                     </div>
                   </div>
+
+                  {!editingData && (
+                    <>
+                      <div>
+                        <label className="block text-gray-700 text-sm font-semibold mb-2">
+                          Area Parkir <span className="text-red-500">*</span>
+                        </label>
+                        <select
+                          name="id_area"
+                          value={formData.id_area}
+                          onChange={handleInputChange}
+                          className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
+                          required
+                        >
+                          <option value="">Pilih Area</option>
+                          {areas
+                            .filter((area) => area.terisi < area.kapasitas)
+                            .map((area) => (
+                              <option key={area.id_area} value={area.id_area}>
+                                {area.nama_area} (Tersedia:{" "}
+                                {area.kapasitas - area.terisi})
+                              </option>
+                            ))}
+                        </select>
+                      </div>
+
+                      <p className="text-xs text-gray-500">
+                        Saat disimpan, kendaraan akan langsung dicatat sebagai
+                        kendaraan masuk dan muncul di halaman petugas.
+                      </p>
+                    </>
+                  )}
                 </div>
               )}
 
